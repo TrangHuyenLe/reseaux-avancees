@@ -49,7 +49,7 @@ def receive_messages():
             elif message == "[PARTNER_LEFT]":
                 print("Your chat partner has left the chat.")
             else:
-                print(f"{username}: {message}")
+                print(f"{message}")
         except Exception as e:
             print(f"Error receiving message: {e}")
             client_socket.close()
@@ -58,36 +58,83 @@ def receive_messages():
             print("\nExiting chat...")
             client_socket.close()
             break
+
+def handle_server_response():
+    """
+    Receives and handles messages from the server during the pairing phase.
+
+    Returns:
+        bool: True if a partner is found, False otherwise.
+    """
+    try:
+        message = client_socket.recv(1024).decode('utf-8')
+        if message == "[CHAT_FOUND]":
+            print("You have been paired with another user. Start chatting!")
+            return True
+        elif message == "[NO_PARTNER_FOUND]":
+            print("No partner found. Please wait, don't send messages yet.")
+            return False
+        elif message == "[DISCONNECTED]":
+            print("You have been disconnected from the server.")
+            client_socket.close()
+            return False
+        elif message == "[PARTNER_LEFT]":
+            print("Your chat partner has left the chat.")
+            client_socket.close()
+            return False
+    except Exception as e:
+        print(f"Error receiving message: {e}")
+        client_socket.close()
+        return False
+    except KeyboardInterrupt:
+        print("\nExiting chat...")
+        client_socket.close()
+        return False
+    return False
+
 def send_messages():
     """
-    Send messages to the server.
-
-    This function runs in a separate thread, allowing the user to type and send
-    messages to their chat partner. The messages are sent to the server, which
-    relays them to the partner.
+    Sends a message to the server, encoding it in UTF-8.
 
     Args:
-        None
+        message (str): The message to send.
+
     Returns:
         None
     """
+    # Sending first message to the server with the username
+    client_socket.send(f"[USERNAME]{username}".encode('utf-8'))
+
+    # Wait for the other user to join
+    print("Waiting for a partner to join...")
+    partner_found = False
+    while not partner_found:
+        partner_found = handle_server_response()
+        print(partner_found)
+        if partner_found == True:
+            break
+        
+    # Now the user can send messages
+    print("You can start sending messages now. Type '/exit' to leave the chat.")
     while True:
         try:
             message = input()
             if message.lower() == '/exit':
                 print("Exiting chat...")
+                client_socket.send("[DISCONNECTED]".encode('utf-8'))
                 client_socket.close()
                 break
-            client_socket.send(message.encode('utf-8'))
-            if message.lower() == '/help':
+            elif message.lower() == '/help':
+                client_socket.send("[HELP]".encode('utf-8'))
                 print("Available commands: /exit - Leave chat, /help - Show this message")
             else:
+                client_socket.send(f"{username}: {message}".encode('utf-8'))
                 print(f"{username}: {message}")
         except Exception as e:
             print(f"Error sending message: {e}")
             client_socket.close()
             break
-        except KeyboardInterrupt:  
+        except KeyboardInterrupt:
             print("\nExiting chat...")
             client_socket.close()
             break
