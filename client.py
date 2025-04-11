@@ -41,56 +41,37 @@ def receive_messages():
     Returns:
         None
     """
+    partner_found = False
     while True:
         try:
             message = client_socket.recv(1024).decode('utf-8')
             if message == "[CHAT_FOUND]":
-                print("You have been paired with another user. Start chatting!")
+                print("You're allowed to type message now!")
+                partner_found = True
             elif message == "[PARTNER_LEFT]":
-                print("Your chat partner has left the chat.")
-            else:
+                print("Your chat partner has left the chat. Trying to find a new partner...")
+                partner_found = False
+            elif partner_found:
                 print(f"{message}")
+                partner_found = True
+            elif message == "[DISCONNECTED]":
+                print("Disconnected from the server.")
+                partner_found = False
+                client_socket.close()
+                break
+            else:
+                print(f"Unknown message: {message}")
+                partner_found = False
         except Exception as e:
+            partner_found = False
             print(f"Error receiving message: {e}")
             client_socket.close()
             break
         except KeyboardInterrupt:
+            partner_found = False
             print("\nExiting chat...")
             client_socket.close()
             break
-
-def handle_server_response():
-    """
-    Receives and handles messages from the server during the pairing phase.
-
-    Returns:
-        bool: True if a partner is found, False otherwise.
-    """
-    try:
-        message = client_socket.recv(1024).decode('utf-8')
-        if message == "[CHAT_FOUND]":
-            print("You have been paired with another user. Start chatting!")
-            return True
-        elif message == "[NO_PARTNER_FOUND]":
-            print("No partner found. Please wait, don't send messages yet.")
-            return False
-        elif message == "[DISCONNECTED]":
-            print("You have been disconnected from the server.")
-            client_socket.close()
-            return False
-        elif message == "[PARTNER_LEFT]":
-            print("Your chat partner has left the chat.")
-            client_socket.close()
-            return False
-    except Exception as e:
-        print(f"Error receiving message: {e}")
-        client_socket.close()
-        return False
-    except KeyboardInterrupt:
-        print("\nExiting chat...")
-        client_socket.close()
-        return False
-    return False
 
 def send_messages():
     """
@@ -104,18 +85,7 @@ def send_messages():
     """
     # Sending first message to the server with the username
     client_socket.send(f"[USERNAME]{username}".encode('utf-8'))
-
-    # Wait for the other user to join
-    print("Waiting for a partner to join...")
-    partner_found = False
-    while not partner_found:
-        partner_found = handle_server_response()
-        print(partner_found)
-        if partner_found == True:
-            break
-        
-    # Now the user can send messages
-    print("You can start sending messages now. Type '/exit' to leave the chat.")
+    # Loop to send messages until the user exits
     while True:
         try:
             message = input()
@@ -127,6 +97,9 @@ def send_messages():
             elif message.lower() == '/help':
                 client_socket.send("[HELP]".encode('utf-8'))
                 print("Available commands: /exit - Leave chat, /help - Show this message")
+            elif message.startswith('/history'):
+                client_socket.send("[HISTORY]".encode('utf-8'))
+                print("Fetching chat history in the previous sessions.")
             else:
                 client_socket.send(f"{username}: {message}".encode('utf-8'))
                 print(f"{username}: {message}")
@@ -150,12 +123,14 @@ def start_client():
     Commands:
     - /exit : Leaves the chat session.
     - /help : Displays available commands.
+    - /history : Fetches chat history from previous sessions.
 
     Returns:
         None
     """
     print("Connected to the server. Waiting for a partner...")
     print("Type '/exit' to leave the chat.")
+    print("Type '/history' to fetch chat history.")
     print("Type '/help' for available commands.")
     # Start the threads for receiving and sending messages
     receive_thread = threading.Thread(target=receive_messages)

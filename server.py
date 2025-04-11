@@ -14,11 +14,10 @@ import socket
 import threading
 import time
 import datetime
-import time
 from queue import Queue
 import json
 from threading import Lock
-
+import os
 
 # Global constants
 PORT = 55555
@@ -69,8 +68,6 @@ def handle_client(client):
         
     wait_for_partner(client)
 
-    # Handle client disconnection
-    handle_client_disconnection(client, username)
 def receive_username(client):
     """Receives and validates the username from the client."""
     try:
@@ -105,35 +102,44 @@ def wait_for_partner(client):
         None
     """
     while True:
-        # Check if the client in the active pairs
-        if len(waiting_clients) > 1 and client not in active_pairs:
-            partner = waiting_clients.pop(0)
-            if partner and partner != client:
-                pair_clients(client, partner)
-                break
-                # Check if the client is still in the waiting list and not having a partner
-            else:
-                # No partner found, wait for a while before checking again
-                time.sleep(10)
-                print(f"{usernames.get(client, 'Unknown')} is waiting for a partner...")
-                client.send("[NO_PARTNER_FOUND]".encode('utf-8'))
-def handle_client_disconnection(client, username):
-    """Handles client disconnection and any associated errors."""
-    while True:
-        try:
-            message = client.recv(1024).decode('utf-8')
-            if message == "[DISCONNECTED]":
-                print(f"{username} disconnected.")
-                break
-            elif message == "[HELP]":
-                client.send("[HELP]".encode('utf-8'))
-            else:
-                # Save chat history
-                chat_history.append({"user": username, "message": message})
-        except Exception as e:
-            print(f"Error handling client {username}: {e}")
-            cleanup_client(client)
+        if client not in waiting_clients:
+            handle_client_not_in_waiting_list(client)
             break
+
+        if client not in active_pairs:
+            if len(waiting_clients) > 1:
+                partner = waiting_clients.pop(0)
+                if partner and partner != client:
+                    pair_clients(client, partner)
+                    break
+            else:
+                handle_no_partner_found(client)
+        else:
+            handle_existing_partner(client)
+            break
+
+def handle_client_not_in_waiting_list(client):
+    """Handles the case where the client is not in the waiting list."""
+    username = usernames.get(client, 'Unknown')
+    print(f"{username} is no longer in the waiting list.")
+    if client in active_pairs:
+        pair_clients(client, active_pairs[client])
+        print(f"{username} already has a partner.")
+    else:
+        raise ValueError(f"ClientError: {username} not in waiting list.")
+
+def handle_no_partner_found(client):
+    """Handles the case where no partner is found in the waiting list."""
+    username = usernames.get(client, 'Unknown')
+    print(f"{username} is waiting for a partner...")
+    client.send("[NO_PARTNER_FOUND]".encode('utf-8'))
+    time.sleep(1)
+
+def handle_existing_partner(client):
+    """Handles the case where the client already has a partner."""
+    pair_clients(client, active_pairs[client])
+    print(f"{usernames.get(client, 'Unknown')} already has a partner.")
+
     
 def cleanup_client(client):
     """
@@ -148,10 +154,10 @@ def cleanup_client(client):
     """
     try:
         username = usernames.get(client, "Unknown")
-
-        # Remove client from waiting clients if present
-        if client in waiting_clients:
-            waiting_clients.remove(client)
+        with lock: 
+            # Remove client from waiting clients if present
+            if client in waiting_clients:
+                waiting_clients.remove(client)
 
         # Handle active pair disconnection
         if client in active_pairs:
@@ -199,9 +205,12 @@ def pair_clients(client1, client2):
         client2 (socket.socket): The socket object of the second client.
     """
     try:
-        # Notify clients that a chat partner has been found
+        # Notify clients that a chat partner has been found (the other client will be notified thanks to the partner)
         client1.send("[CHAT_FOUND]".encode('utf-8'))
-        client2.send("[CHAT_FOUND]".encode('utf-8'))
+        
+        # Update active pairs
+        active_pairs[client1] = client2
+        active_pairs[client2] = client1
         
         # Remove clients from waiting list
         if client1 in waiting_clients:
@@ -209,17 +218,12 @@ def pair_clients(client1, client2):
         if client2 in waiting_clients:
             waiting_clients.remove(client2)
         
-        # Update active pairs
-        active_pairs[client1] = client2
-        active_pairs[client2] = client1
 
         print(f"Paired clients: {usernames.get(client1, 'Unknown')} and {usernames.get(client2, 'Unknown')}")
 
         # Start a new thread to handle messages between the clients
-        threading.Thread(target=handle_messages, args=(client1, client2), daemon=True).start()
-        print(f"Started message handling thread for {usernames.get(client1, 'Unknown')} and {usernames.get(client2, 'Unknown')}")
-        # # Start the message handling function
-        # handle_messages(client1, client2)
+        threading.Thread(target=handle_messages, args=(client1, client2)).start()
+        print(f"Started message handling message for {usernames.get(client1, 'Unknown')} and {usernames.get(client2, 'Unknown')}")
     except Exception as e:
         print(f"Error pairing clients: {e}")
         cleanup_client(client1)
@@ -239,46 +243,15 @@ def handle_messages(client1, client2):
     """
     try:
         while True:
-            # Receive message from client1
-            try:
-                message = client1.recv(1024).decode('utf-8')
-            except Exception:
-                message = "[DISCONNECTED]"
-            # Check for disconnection or special commands    
-            if message == "[DISCONNECTED]":
-                print(f"Client {usernames.get(client1)} disconnected.")
-                client2.send("[PARTNER_DISCONNECTED]".encode('utf-8'))
+            # Handle message from client1
+            message_exchange_c1_c2 = handle_client_message(client1, client2)
+            if not message_exchange_c1_c2 :
                 break
-            elif message == "[HELP]":
-                client1.send("[HELP]".encode('utf-8'))
-            else:
-                # Relay the message to client2
-                client2.send(message.encode('utf-8'))
-                # Save chat history
-                chat_history.append({"user": usernames.get(client1), "message": message})
-                # Print the message to the server console
-                print(f"{message}")
-
-            # Receive message from client2
-            try:
-                message = client2.recv(1024).decode('utf-8')
-            except Exception:
-                message = "[DISCONNECTED]"
-
-            if message == "[DISCONNECTED]":
-                print(f"Client {usernames.get(client2)} disconnected.")
-                client1.send("[PARTNER_DISCONNECTED]".encode('utf-8'))
+        while True:
+            # Handle message from client2
+            message_exchange_c2_c1 = handle_client_message(client2, client1)
+            if not message_exchange_c2_c1:
                 break
-            elif message == "[HELP]":
-                client2.send("[HELP]".encode('utf-8'))
-            else:
-                # Relay the message to client1
-                client1.send(message.encode('utf-8'))
-                # Save chat history
-                chat_history.append({"user": usernames.get(client2), "message": message})
-                # Print the message to the server console
-                print(f"{message}")
-
     except Exception as e:
         print(f"Error handling messages: {e}")
     finally:
@@ -294,6 +267,44 @@ def handle_messages(client1, client2):
         cleanup_client(client1)
         cleanup_client(client2)
         print("Chat session ended.")
+
+def handle_client_message(client, other_client):
+    """
+    Handles receiving and processing messages from a single client.
+
+    Args:
+        client (socket.socket): The socket object of the client.
+        other_client (socket.socket): The socket object of the other client in the pair.
+
+    Returns:
+        bool: True if the message was handled successfully, False if the client disconnected.
+    """
+    try:
+        message = client.recv(1024).decode('utf-8')
+    except Exception:
+        message = "[DISCONNECTED]"
+
+    if message == "[DISCONNECTED]":
+        print(f"Client {usernames.get(client)} disconnected.")
+        other_client.send("[PARTNER_DISCONNECTED]".encode('utf-8'))
+        return False
+    elif message == "[HELP]":
+        client.send("[HELP]".encode('utf-8'))
+    elif message == "[HISTORY]":
+        # Send chat history to the client
+        if chat_history:
+            print(chat_history)
+            client.send(json.dumps(chat_history).encode('utf-8'))
+        else:
+            client.send("No chat history available.".encode('utf-8'))
+    else:
+        # Relay the message to the other client
+        other_client.send(message.encode('utf-8'))
+        # Save chat history
+        chat_history.append({"user": usernames.get(client), "message": message})
+        # Print the message to the server console
+        print(f"{message}")
+    return True
 
 def save_chat_log(pair_user1, pair_user2, messages):
     """
@@ -315,9 +326,26 @@ def save_chat_log(pair_user1, pair_user2, messages):
         "timestamp": datetime.datetime.now().isoformat(),
         "messages": messages
     }
+    
+    log_file_path = "history/chat_logs.json"
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+
+    logs = []
+
+    # Check if the file exists and read existing logs
+    if os.path.exists(log_file_path):
+        try:
+            with open(log_file_path, "r") as f:
+                logs = json.load(f)
+        except json.JSONDecodeError:
+            print("Warning: Failed to decode JSON, starting with an empty log.")
+    # Append the new chat log
+    logs.append(chat_log)
+    # Write the updated logs back to the file
     try:
-        with open("history/chat_logs.json", "a") as f:
-            json.dump(chat_log, f)
+        with open(log_file_path, "w") as f:
+            json.dump(logs, f, indent=4)
             f.write("\n")  # Add a newline to separate JSON objects
         print(f"Chat log saved for {pair_user1} and {pair_user2}.")
     except Exception as e:
