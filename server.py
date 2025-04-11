@@ -291,10 +291,35 @@ def handle_client_message(client, other_client):
     elif message == "[HELP]":
         client.send("[HELP]".encode('utf-8'))
     elif message == "[HISTORY]":
-        # Send chat history to the client
-        if chat_history:
-            print(chat_history)
-            client.send(json.dumps(chat_history).encode('utf-8'))
+        log_file_path = "history/chat_logs.json"
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+        # Check if the file exists and read existing logs
+        if os.path.exists(log_file_path):
+            try:
+                with open(log_file_path, "r") as f:
+                    try:
+                        logs = json.load(f)
+                    except json.JSONDecodeError:
+                        client.send("Error decoding chat history.".encode('utf-8'))
+                        return True
+                    # Filter logs for the current user
+                    user_logs = []
+                    for log in logs:
+                        if log["user1"] == usernames.get(client) or log["user2"] == usernames.get(client):
+                            user_logs.append(log)
+                    if user_logs:
+                        formatted_history = ""
+                        for log in user_logs:
+                            formatted_history += f"Chat with {log['user1'] if log['user1'] != usernames.get(client) else log['user2']} at {log['timestamp']}:\n"
+                            for msg in log["messages"]:
+                                formatted_history += f"  {msg['user']}: {msg['message']}\n"
+                            formatted_history += "\n"
+                        client.send(formatted_history.encode('utf-8'))
+                    else:
+                        client.send("No chat history available for this user.".encode('utf-8'))
+            except FileNotFoundError:
+                client.send("No chat history available.".encode('utf-8'))
         else:
             client.send("No chat history available.".encode('utf-8'))
     else:
